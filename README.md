@@ -8,8 +8,15 @@ It is intended to make it easy to run, measure, and experiment with different le
 
 # Agents
 
- - ddqn, double q-learning agent with various Keras NN's for Q approximation
- - dqn, q-learning agent with various Keras NN's for Q approximation
+ - pg: policy gradient method with Keras NN policy network
+ - ddqn: double q-learning agent with various Keras NN's for Q approximation
+ - dqn: q-learning agent with various Keras NN's for Q approximation
+
+# Installation
+
+```
+sudo python setup.py install
+```
 
 # Usage
 
@@ -20,9 +27,9 @@ It is intended to make it easy to run, measure, and experiment with different le
 or
 
 ```
-Exmaple: python kerlym.py -e Go9x9-v0 -n simple_dnn -P
+Exmaple: kerlym -e Go9x9-v0 -n simple_dnn -P
 
-Usage: kerlym.py [options]
+Usage: kerlym [options]
 
 Options:
   -h, --help            show this help message and exit
@@ -57,6 +64,9 @@ Options:
   -S, --submit          Submit Results to OpenAI [False]
   -a AGENT, --agent=AGENT
                         Which learning algorithm to use [ddqn]
+  -i, --difference      Compute Difference Image for Training [False]
+  -r LEARNING_RATE, --learning_rate=LEARNING_RATE
+                        RMSprop Learning Rate [0.0001]
 ```
 
 or
@@ -65,12 +75,21 @@ or
 from gym import envs
 env = envs.make("SpaceInvaders-v0")
 
-import ddqn
-agent = ddqn.D2QN(env, nframes=2, epsilon=0.1, discount=0.99, 
-                    modelfactory=ddqn.simple_cnn,
-                    update_nsamp=1000, batch_size=32, dropout=0.5, 
-                    enable_plots = True, max_memory = 1000000, 
-                    epsilon_schedule=lambda episode,epsilon: epsilon*(1-1e-4)
+import kerlym
+agent = kerlym.agents.D2QN(env, 
+                    nframes=1, 
+                    epsilon=0.5, 
+                    discount=0.99, 
+                    modelfactory=kerlym.networks.simple_cnn,
+                    update_nsamp=1000, 
+                    batch_size=32, 
+                    dropout=0.1, 
+                    enable_plots = True, 
+                    max_memory = 1000000, 
+                    epsilon_schedule=lambda episode,epsilon: max(0.1, epsilon*(1-1e-4)),                
+                    dufference_obs = True,
+                    preprocessor = kerlym.perproc.karpathy_preproc,
+                    learning_rate = 1e-3
                     )
 agent.learn()
 ```
@@ -92,8 +111,22 @@ def custom_Q_nn(agent, env, dropout=0, h0_width=8, h1_width=8, **args):
     model.compile(loss='mse', optimizer=RMSprop(lr=0.01) )
     return model
 
-agent = ddqn.D2QN(env, modelfactory=custom_Q_nn)
+agent = keras.agents.D2QN(env, modelfactory=custom_Q_nn)
 
+```
+
+# Citation
+
+If using this work in your research, citation of our publication introducing this platform would be greatly appreciated!
+The arXiv paper is available at https://arxiv.org/abs/1605.09221 and a simple bibtex entry is provided below.
+
+```
+@misc{1605.09221,
+Author = {Timothy J. O'Shea and T. Charles Clancy},
+Title = {Deep Reinforcement Learning Radio Control and Signal Detection with KeRLym, a Gym RL Agent},
+Year = {2016},
+Eprint = {arXiv:1605.09221},
+}
 ```
 
 # Acknowledgements
@@ -101,6 +134,10 @@ agent = ddqn.D2QN(env, modelfactory=custom_Q_nn)
 Much thanks to all of the following projects for their inspiration and contributions
  - https://github.com/dandxy89/rf_helicopter
  - https://github.com/sherjilozair/dqn
+ - https://gist.github.com/karpathy/a4166c7fe253700972fcbc77e4ea32c5
  - Keras and Gym
 
 -Tim
+
+# Remind
+Install `pip install gym` and `pip install gym[atari]`. If gym[atari] has install error, `apt-get install cmake`.

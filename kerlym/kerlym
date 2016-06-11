@@ -3,6 +3,8 @@ import os,random
 #os.environ["THEANO_FLAGS"] = "mode=FAST_RUN,device=gpu%d,floatX=float32"%(random.randint(0,3))
 import tempfile,logging,sys
 
+from kerlym import networks,agents,preproc
+
 from optparse import OptionParser
 parser = OptionParser()
 parser.add_option("-e", "--env", dest="env", default="MountainCar-v0",                  help="Which GYM Environment to run [%default]")
@@ -21,6 +23,8 @@ parser.add_option("-P", "--plots", dest="plots", action="store_true", default=Fa
 parser.add_option("-F", "--plot_rate", dest="plot_rate", default=10, type='int',        help="Plot update rate in episodes [%default]")
 parser.add_option("-S", "--submit", dest="submit", action="store_true", default=False,  help="Submit Results to OpenAI [%default]")
 parser.add_option("-a", "--agent", dest="agent", default="ddqn",                        help="Which learning algorithm to use [%default]")
+parser.add_option("-i", "--difference", dest="difference_obs", action="store_true", default=False,  help="Compute Difference Image for Training [%default]")
+parser.add_option("-r", "--learning_rate", dest="learning_rate", type='float', default=1e-4,  help="RMSprop Learning Rate [%default]")
 (options, args) = parser.parse_args()
 
 print options.agent
@@ -33,17 +37,29 @@ env = envs.make(options.env)
 if options.submit:
     env.monitor.start(training_dir)
 
-import dqn
 agent_constructor = {
-    "dqn":dqn.DQN,
-    "ddqn":dqn.D2QN
+    "dqn":agents.DQN,
+    "ddqn":agents.D2QN,
+    "pg":agents.PG
 }[options.agent]
 
-agent = agent_constructor(env, nframes=options.nframes, epsilon=options.epsilon, discount=options.discount, modelfactory=eval("dqn.%s"%(options.net)),
+agent = agent_constructor(
+                    env=env,
+                    nframes=options.nframes,
+                    epsilon=options.epsilon,
+                    discount=options.discount,
+                    modelfactory=eval("networks.%s"%(options.net)),
                     epsilon_schedule=lambda episode,epsilon: max(0.05, epsilon*(1-options.epsilon_decay)),
-                    update_nsamp=options.update_size, batch_size=options.bs, dropout=options.dropout,
-                    timesteps_per_batch=options.update_freq, stats_rate=options.plot_rate,
-                    enable_plots = options.plots, max_memory = options.maxmem )
+                    update_nsamp=options.update_size,
+                    batch_size=options.bs,
+                    dropout=options.dropout,
+                    timesteps_per_batch=options.update_freq,
+                    stats_rate=options.plot_rate,
+                    enable_plots = options.plots,
+                    max_memory = options.maxmem,
+                    difference_obs = options.difference_obs,
+                    learning_rate=options.learning_rate
+                    )
 agent.learn()
 if options.submit:
     env.monitor.close()

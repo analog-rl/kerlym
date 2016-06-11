@@ -1,60 +1,12 @@
 import logging,os,cPickle,time
 from statbin import statbin
 from random import choice, random, sample
-import keras.backend as K
 import numpy as np
-from keras.layers.embeddings import Embedding
-from keras.layers.convolutional import Convolution1D, MaxPooling1D
-from keras.layers.core import Dense, Dropout, Activation, Flatten, Reshape
-from keras.layers.recurrent import LSTM
-from keras.layers.embeddings import Embedding
-from keras.models import Model
-from keras.layers import Convolution2D, Dense, Flatten, Input, merge, Lambda, TimeDistributed
-from keras.optimizers import RMSprop, Adadelta, Adam
 
-# Some example networks which can be used as the Q function approximation ...
-
-def simple_dnn(agent, env, dropout=0.5, **args):
-    S = Input(shape=[agent.input_dim])
-    h = Dense(256, activation='relu', init='he_normal')(S)
-    h = Dropout(dropout)(h)
-    h = Dense(256, activation='relu', init='he_normal')(h)
-    h = Dropout(dropout)(h)
-    V = Dense(env.action_space.n, activation='linear',init='zero')(h)
-    model = Model(S,V)
-    model.compile(loss='mse', optimizer=RMSprop(lr=0.01) )
-    return model
-
-def simple_rnn(agent, env, dropout=0, h0_width=8, h1_width=8, **args):
-    S = Input(shape=[agent.input_dim])
-    h = Reshape([agent.nframes, agent.input_dim/agent.nframes])(S)
-    h = TimeDistributed(Dense(h0_width, activation='relu', init='he_normal'))(h)
-    h = Dropout(dropout)(h)
-    h = LSTM(h1_width, return_sequences=True)(h)
-    h = Dropout(dropout)(h)
-    h = LSTM(h1_width)(h)
-    h = Dropout(dropout)(h)
-    V = Dense(env.action_space.n, activation='linear',init='zero')(h)
-    model = Model(S,V)
-    model.compile(loss='mse', optimizer=RMSprop(lr=0.01) )
-    return model
-
-def simple_cnn(agent, env, dropout=0, **args):
-    S = Input(shape=[agent.input_dim])
-    h = Reshape( agent.input_dim_orig )(S)
-    h = TimeDistributed( Convolution2D(16, 8, 8, subsample=(4, 4), border_mode='same', activation='relu'))(h)
-    h = TimeDistributed( Convolution2D(32, 4, 4, subsample=(2, 2), border_mode='same', activation='relu'))(h)
-    h = Flatten()(h)
-    h = Dense(256, activation='relu')(h)
-    V = Dense(env.action_space.n, activation='linear',init='zero')(h)
-    model = Model(S, V)
-    model.compile(loss='mse', optimizer=RMSprop(lr=0.01) )
-    return model
-
-
+import networks
 
 class D2QN:
-    def __init__(self, env, nframes=1, epsilon=0.1, discount=0.99, train=1, update_nsamp=1000, timesteps_per_batch=1000, dropout=0, batch_size=32, nfit_epoch=1, epsilon_schedule=None, modelfactory=simple_dnn, enable_plots=False, max_memory=100000, stats_rate=10, fit_verbose=0, **args):
+    def __init__(self, env, nframes=1, epsilon=0.1, discount=0.99, train=1, update_nsamp=1000, timesteps_per_batch=1000, dropout=0, batch_size=32, nfit_epoch=1, epsilon_schedule=None, modelfactory=networks.simple_dnn, enable_plots=False, max_memory=100000, stats_rate=10, fit_verbose=0, difference_obs=False, preprocessor=None, render=False, **kwargs):
         self.double = True
         self.fit_verbose = 0
         self.env = env
@@ -73,12 +25,20 @@ class D2QN:
         self.stats_rate = stats_rate
         self.train_costs = []
         self.nterminal = 0
-
-        # Neural Network Parameters
+        self.difference_obs = difference_obs
+        self.preprocessor = preprocessor
         self.batch_size = batch_size
         self.dropout = dropout
-        self.input_dim_orig = [nframes]+list(env.observation_space.shape)
+        self.render = render
+
+        # set up output shape to be either pre-processed or not
+        if not preprocessor == None:
+            o = preprocessor(np.zeros( env.observation_space.shape ) )
+            self.input_dim_orig = [nframes] + list(o.shape)
+        else:
+            self.input_dim_orig = [nframes]+list(env.observation_space.shape)
         self.input_dim = np.product( self.input_dim_orig )
+
         print "Input Dim: ", self.input_dim, self.input_dim_orig
         print "Output Actions: ", self.actions
 
@@ -89,7 +49,7 @@ class D2QN:
         self.updates = 0
         self.model_updates = 0
 
-        self.models = map(lambda x: modelfactory(self, env=env, dropout=dropout, **args), [0,1])
+        self.models = map(lambda x: modelfactory(self, env=env, dropout=dropout, **kwargs), [0,1])
         self.stats = None
 
         print self.models[0].summary()
@@ -226,26 +186,44 @@ class D2QN:
         for e in xrange(max_episodes):
 
             observation = self.env.reset()
+            if not self.preprocessor == None:
+                observation = self.preprocessor(observation)
+
             done = False
             total_reward = 0.0
             t = 0
             maxv = []
             minv = []
 
-            obs = np.zeros( [self.nframes]+list(self.env.observation_space.shape) )
-            new_obs = np.zeros( [self.nframes]+list(self.env.observation_space.shape) )
+            obs = np.zeros( self.input_dim_orig )
+            new_obs = np.zeros( self.input_dim_orig )
             obs[0,:] = observation
 
             while (not done) and (t<max_pathlength):
                 t += 1
-                self.env.render()
+                if self.render:
+                    self.env.render()
                 action, values = self.act(obs)
                 maxv.append(max(values.flatten()))
                 minv.append(min(values.flatten()))
 
                 new_observation, reward, done, info = self.env.step(action)
+
+                # compute preprocessed observation if enabled ...
+                if not self.preprocessor == None:
+                    new_observation = self.preprocessor(new_observation)
+
+                # compute difference observation if enabled ...
+                if self.difference_obs:
+                    # compute difference image
+                    o = (new_observation-observation)
+                    observation = new_observation
+                else:
+                    # use observation directly
+                    o = new_observation
+
                 new_obs[1:,:] = obs[-1:,:]
-                new_obs[0,:] = new_observation
+                new_obs[0,:] = o
                 if not done and t == max_pathlength-1:
                     done = True
 
