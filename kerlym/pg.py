@@ -2,7 +2,8 @@
 import numpy as np
 import cPickle as pickle
 import gym,keras
-import preproc, networks
+import preproc, networks, statbin
+import matplotlib.pyplot as plt
 
 # This policy gradient implementation is an adaptation of Karpathy's GIST
 # https://gist.github.com/karpathy/a4166c7fe253700972fcbc77e4ea32c5
@@ -16,9 +17,10 @@ class PG:
         file_model='pg_model.json',
         file_weights='pg_model_wts.h5',
         resume=False,
+        enable_plots=False,
         *args, **kwargs):
 
-        self.env = env
+        self.env = env()
         self.render = render
         self.preprocessor = preprocessor
         self.nframes = nframes
@@ -26,17 +28,18 @@ class PG:
         self.file_model = file_model
         self.file_weights = file_weights
         self.resume = resume
+        self.enable_plots = enable_plots
 
         # set up output shape to be either pre-processed or not
         if not preprocessor == None:
-            o = preprocessor(np.zeros( env.observation_space.shape ) )
+            o = preprocessor(np.zeros( self.env.observation_space.shape ) )
             self.input_dim_orig = [nframes] + list(o.shape)
         else:
-            self.input_dim_orig = [nframes]+list(env.observation_space.shape)
+            self.input_dim_orig = [nframes]+list(self.env.observation_space.shape)
         self.input_dim = np.product( self.input_dim_orig )
 
         # Make NN model
-        self.model = modelfactory(self, env=env, dropout=dropout, **kwargs)
+        self.model = modelfactory(self, env=self.env, dropout=dropout, **kwargs)
         print self.model.summary()
 
         # testing
@@ -56,14 +59,20 @@ class PG:
       """ take 1D float array of rewards and compute discounted reward """
       discounted_r = np.zeros_like(r)
       running_add = 0
+      r = r.flatten()
       for t in reversed(xrange(0, r.size)):
-        if r[t] != 0: running_add = 0 # reset the sum, since this was a game boundary (pong specific!)
+
+        # reset per pong mini-game if we are playing pong ...
+        if self.env.game_path[-8:] == "pong.bin":
+            if r[t] != 0: running_add = 0 # reset the sum, since this was a game boundary (pong specific!)
+
         running_add = running_add * self.discount + r[t]
         discounted_r[t] = running_add
       return discounted_r
 
-    def learn(self, ipy_clear=False, max_episodes=100000000, max_pathlength=200):
+    def train(self, ipy_clear=False, max_episodes=100000000, max_pathlength=200):
 
+        rewards = statbin.statbin(10)
         observation = self.env.reset()
         prev_x = None # used in computing the difference frame
         xs,hs,dlogps,drs = [],[],[],[]
@@ -89,16 +98,21 @@ class PG:
 
           # record various intermediates (needed later for backprop)
           xs.append(x) # observation
+
+          # Harsh Grad ...
           y = np.zeros([self.env.action_space.n])
           y[action] = 1
 
-          dlogps.append(y - aprob) # grad that encourages the action that was taken to be taken (see http://cs231n.github.io/neural-networks-2/#losses if confused)
+          # Subtle Grad ...
+#          y = aprob*0.9
+#          y[action] = aprob[action] * 1.1
 
-          # step the environment and get new measurements
+          dlogps.append(y) # grad that encourages the action that was tak
+          #dlogps.append(y - aprob) # grad that encourages the action that was tak
           observation, reward, done, info = self.env.step(action)
-          reward_sum += reward
+          reward_sum += float(reward)
 
-          drs.append(reward) # record reward (has to be done after we call step() to get reward for previous action)
+          drs.append(float(reward)) # record reward (has to be done after we call step() to get reward for previous action)
 
           if done: # an episode finished
             episode_number += 1
@@ -122,12 +136,21 @@ class PG:
 
             # boring book-keeping
             running_reward = reward_sum if running_reward is None else running_reward * 0.99 + reward_sum * 0.01
+            rewards.add(reward_sum)
             print 'resetting env. episode reward total was %f. running mean: %f' % (reward_sum, running_reward)
             if episode_number % 100 == 0:
                 self.save()
             reward_sum = 0
             observation = self.env.reset() # reset env
             prev_x = None
+
+            if(self.enable_plots):
+                plt.figure(1)
+                #plt.plot(rewards)
+                rewards.plot()
+                plt.show(block=False)
+                plt.draw()
+                plt.pause(0.001)
 
           if reward != 0: # Pong has either +1 or -1 reward exactly when game ends.
             print ('ep %d: game finished, reward: %f' % (episode_number, reward)) + ('' if reward == -1 else ' !!!!!!!!')
